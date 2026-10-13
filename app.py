@@ -4,7 +4,9 @@ import pandas as pd
 from Bio.Align import PairwiseAligner
 from Bio.SeqUtils.ProtParam import ProteinAnalysis
 
-# ---------------- PAGE CONFIGURATION ----------------
+# ==================================================
+# 1. PAGE CONFIGURATION
+# ==================================================
 
 st.set_page_config(
     page_title="VariantVision",
@@ -12,20 +14,24 @@ st.set_page_config(
     layout="wide"
 )
 
-# ---------------- REFERENCE SEQUENCE ----------------
+st.title("🧬 VariantVision")
+st.subheader("Protein Mutation Comparison and Analysis")
 
-# Human hemoglobin subunit beta (HBB)
-# Reference accession: NCBI RefSeq NP_000509.1
-# Full precursor sequence, including initial methionine
+st.write(
+    "A bioinformatics tool for comparing protein sequences, "
+    "detecting substitutions, insertions and deletions, and "
+    "analyzing physicochemical properties."
+)
+
+# ==================================================
+# 2. DEFAULT HBB SEQUENCES
+# ==================================================
 
 REFERENCE_SEQUENCE = (
     "MVHLTPEEKSAVTALWGKVNVDEVGGEALGRLLVVYPWTQRFFESFGDLSTPDAVMGNPKVKAHGKKVLGAFSDGLAHLDNLKGTFATLSELHCDKLHVDPENFRLLGNVLVCVLAHHFGKEFTPPVQAAYQKVVAGVANALAHKYH"
 )
 
-# Sickle-cell-associated example:
-# E7V in full precursor numbering
-# E6V in mature beta-globin chain numbering
-
+# Sickle-cell-associated example: E7V in full precursor numbering
 VARIANT_SEQUENCE = (
     REFERENCE_SEQUENCE[:6]
     + "V"
@@ -35,203 +41,303 @@ VARIANT_SEQUENCE = (
 VALID_AMINO_ACIDS = set("ACDEFGHIKLMNPQRSTVWY")
 
 
-# ---------------- HELPER FUNCTION ----------------
+# ==================================================
+# 3. HELPER FUNCTIONS
+# ==================================================
 
 def clean_sequence(sequence):
     return "".join(sequence.split()).upper()
 
 
-def get_mutations(reference, variant):
+def analyze_mutations(reference, variant):
+    """Detect sequence changes using global alignment coordinates."""
+
+    aligner = PairwiseAligner()
+    aligner.mode = "global"
+    aligner.match_score = 2
+    aligner.mismatch_score = -1
+    aligner.open_gap_score = -3
+    aligner.extend_gap_score = -0.5
+
+    alignment = aligner.align(reference, variant)[0]
+    coordinates = alignment.coordinates
+
     mutations = []
 
-    if len(reference) != len(variant):
-        return mutations
+    # Each pair of consecutive alignment coordinates defines
+    # a matching, substitution, insertion or deletion segment.
+    for i in range(coordinates.shape[1] - 1):
 
-    for position, (ref_aa, var_aa) in enumerate(
-        zip(reference, variant), start=1
-    ):
-        if ref_aa != var_aa:
-            mutations.append({
-                "Position": position,
-                "Reference": ref_aa,
-                "Variant": var_aa,
-                "Mutation": f"{ref_aa}{position}{var_aa}"
-            })
+        r0 = int(coordinates[0, i])
+        r1 = int(coordinates[0, i + 1])
+        v0 = int(coordinates[1, i])
+        v1 = int(coordinates[1, i + 1])
 
-    return mutations
+        ref_length = r1 - r0
+        var_length = v1 - v0
+
+        # Substitution or matching aligned residues
+        if ref_length > 0 and var_length > 0:
+
+            # Diagonal alignment segments have equal lengths.
+            if ref_length == var_length:
+                for offset in range(ref_length):
+                    ref_aa = reference[r0 + offset]
+                    var_aa = variant[v0 + offset]
+
+                    if ref_aa != var_aa:
+                        position = r0 + offset + 1
+
+                        mutations.append({
+                            "Type": "Substitution",
+                            "Reference position": position,
+                            "Variant position": v0 + offset + 1,
+                            "Reference amino acid": ref_aa,
+                            "Variant amino acid": var_aa,
+                            "Change": f"{ref_aa}{position}{var_aa}"
+                        })
+
+            else:
+                # Defensive fallback for any unequal diagonal block.
+                # Standard pairwise alignments normally use equal
+                # lengths for diagonal segments.
+                common = min(ref_length, var_length)
+
+                for offset in range(common):
+                    ref_aa = reference[r0 + offset]
+                    var_aa = variant[v0 + offset]
+
+                    if ref_aa != var_aa:
+                        position = r0 + offset + 1
+
+                        mutations.append({
+                            "Type": "Substitution",
+                            "Reference position": position,
+                            "Variant position": v0 + offset + 1,
+                            "Reference amino acid": ref_aa,
+                            "Variant amino acid": var_aa,
+                            "Change": f"{ref_aa}{position}{var_aa}"
+                        })
+
+                for offset in range(common, ref_length):
+                    position = r0 + offset + 1
+                    ref_aa = reference[r0 + offset]
+
+                    mutations.append({
+                        "Type": "Deletion",
+                        "Reference position": position,
+                        "Variant position": None,
+                        "Reference amino acid": ref_aa,
+                        "Variant amino acid": "-",
+                        "Change": f"del {ref_aa}{position}"
+                    })
+
+                for offset in range(common, var_length):
+                    inserted_aa = variant[v0 + offset]
+
+                    mutations.append({
+                        "Type": "Insertion",
+                        "Reference position": r1,
+                        "Variant position": v0 + offset + 1,
+                        "Reference amino acid": "-",
+                        "Variant amino acid": inserted_aa,
+                        "Change": f"ins {inserted_aa} after {r1}"
+                    })
+
+        # Deletion: reference advances, variant has a gap
+        elif ref_length > 0:
+
+            for offset in range(ref_length):
+                position = r0 + offset + 1
+                ref_aa = reference[r0 + offset]
+
+                mutations.append({
+                    "Type": "Deletion",
+                    "Reference position": position,
+                    "Variant position": None,
+                    "Reference amino acid": ref_aa,
+                    "Variant amino acid": "-",
+                    "Change": f"del {ref_aa}{position}"
+                })
+
+        # Insertion: variant advances, reference has a gap
+        elif var_length > 0:
+
+            for offset in range(var_length):
+                inserted_aa = variant[v0 + offset]
+
+                mutations.append({
+                    "Type": "Insertion",
+                    "Reference position": r0,
+                    "Variant position": v0 + offset + 1,
+                    "Reference amino acid": "-",
+                    "Variant amino acid": inserted_aa,
+                    "Change": f"ins {inserted_aa} after {r0}"
+                })
+
+    return alignment, mutations
 
 
-# ---------------- DASHBOARD HEADER ----------------
-
-st.title("🧬 VariantVision")
-
-st.subheader("Protein Mutation Comparison and Analysis")
-
-st.write(
-    "VariantVision is a bioinformatics tool that compares "
-    "reference and variant protein sequences, detects amino-acid "
-    "changes, calculates protein properties, and presents "
-    "biological interpretation."
-)
-
-st.info(
-    "Case study: Human hemoglobin beta (HBB) and the "
-    "sickle-cell-associated E7V substitution."
-)
-
-st.divider()
-
-
-# ---------------- SEQUENCE INPUT ----------------
+# ==================================================
+# 4. SEQUENCE INPUT
+# ==================================================
 
 st.header("1. Protein Sequence Input")
 
 st.caption(
-    "The default sequences demonstrate the HBB E7V variant. "
-    "You can edit either sequence to test other substitutions."
+    "Default example: human HBB protein with an E7V substitution. "
+    "Edit either sequence to test other variants."
 )
 
 reference_input = st.text_area(
     "Reference protein sequence",
     value=REFERENCE_SEQUENCE,
-    height=130,
-    key="reference"
+    height=130
 )
 
 variant_input = st.text_area(
     "Variant protein sequence",
     value=VARIANT_SEQUENCE,
-    height=130,
-    key="variant"
+    height=130
 )
 
-analyze = st.button(
+analyze_button = st.button(
     "🔍 Analyze Sequences",
     type="primary",
     use_container_width=True
 )
 
+# ==================================================
+# 5. ANALYSIS
+# ==================================================
 
-# ---------------- SEQUENCE ANALYSIS ----------------
-
-if analyze:
+if analyze_button:
 
     reference = clean_sequence(reference_input)
     variant = clean_sequence(variant_input)
-
-    # Validate sequence inputs
 
     if not reference or not variant:
         st.error("Please enter both protein sequences.")
 
     elif set(reference) - VALID_AMINO_ACIDS:
         st.error(
-            "The reference contains invalid characters. "
+            "The reference sequence contains invalid characters. "
             "Use standard one-letter amino-acid codes only."
         )
 
     elif set(variant) - VALID_AMINO_ACIDS:
         st.error(
-            "The variant contains invalid characters. "
+            "The variant sequence contains invalid characters. "
             "Use standard one-letter amino-acid codes only."
         )
 
     else:
 
-        st.success("Both protein sequences passed basic validation.")
+        alignment, mutations = analyze_mutations(
+            reference, variant
+        )
 
-        # ---------------- BASIC SUMMARY ----------------
+        st.success("Sequence analysis completed!")
+
+        # ------------------------------------------
+        # 5A. SEQUENCE SUMMARY
+        # ------------------------------------------
 
         st.header("2. Sequence Summary")
 
         col1, col2, col3 = st.columns(3)
 
-        col1.metric("Reference Length", f"{len(reference)} aa")
-        col2.metric("Variant Length", f"{len(variant)} aa")
+        col1.metric(
+            "Reference Length",
+            f"{len(reference)} amino acids"
+        )
 
-        mutations = get_mutations(reference, variant)
+        col2.metric(
+            "Variant Length",
+            f"{len(variant)} amino acids"
+        )
 
-        col3.metric("Substitutions Detected", len(mutations))
+        col3.metric(
+            "Changes Detected",
+            len(mutations)
+        )
 
-        # ---------------- ALIGNMENT ----------------
+        if len(reference) == len(variant):
+            st.info("Both sequences have the same length.")
+        else:
+            st.info(
+                "The sequences have different lengths. "
+                "Alignment-based analysis is being used to "
+                "identify substitutions, insertions and deletions."
+            )
 
-        st.header("3. Sequence Alignment")
+        # ------------------------------------------
+        # 5B. GLOBAL ALIGNMENT
+        # ------------------------------------------
 
-        aligner = PairwiseAligner()
-        aligner.mode = "global"
-        aligner.match_score = 1
-        aligner.mismatch_score = -1
-        aligner.open_gap_score = -2
-        aligner.extend_gap_score = -0.5
-
-        alignment = aligner.align(reference, variant)[0]
+        st.header("3. Global Sequence Alignment")
 
         st.write(
-            "Global alignment compares the sequences across their "
-            "full lengths and helps identify similarities and differences."
+            "Global alignment compares the sequences across "
+            "their full lengths. Gaps help represent possible "
+            "insertions and deletions."
         )
 
         st.code(str(alignment), language=None)
 
-        # ---------------- MUTATION DETECTION ----------------
+        # ------------------------------------------
+        # 5C. MUTATION DETECTION
+        # ------------------------------------------
 
         st.header("4. Mutation Detection")
 
-        if len(reference) == len(variant):
+        if mutations:
 
-            if mutations:
+            mutation_df = pd.DataFrame(mutations)
 
-                mutation_table = pd.DataFrame(mutations)
-
-                st.dataframe(
-                    mutation_table,
-                    use_container_width=True,
-                    hide_index=True
-                )
-
-                st.markdown("**Sequence comparison**")
-
-                # Highlight substitutions in a simple aligned display
-
-                ref_display = []
-                var_display = []
-                change_display = []
-
-                for ref_aa, var_aa in zip(reference, variant):
-                    ref_display.append(ref_aa)
-                    var_display.append(var_aa)
-                    change_display.append(
-                        "|" if ref_aa == var_aa else "*"
-                    )
-
-                st.code(
-                    "Reference: " + "".join(ref_display[:100])
-                    + ("\n           " + "".join(change_display[:100]))
-                    + "\nVariant:   " + "".join(var_display[:100]),
-                    language=None
-                )
-
-                if len(reference) > 100:
-                    st.caption(
-                        "The display above shows the first 100 residues. "
-                        "The complete alignment is available in the section above."
-                    )
-
-            else:
-                st.success(
-                    "No amino-acid substitutions detected. "
-                    "The sequences are identical."
-                )
-
-        else:
-            st.warning(
-                "The sequence lengths differ. Insertions or deletions "
-                "may be present. Review the global alignment above; "
-                "the simple position-by-position mutation table is "
-                "not shown for sequences of different lengths."
+            st.dataframe(
+                mutation_df,
+                use_container_width=True,
+                hide_index=True
             )
 
-        # ---------------- PROTEIN PROPERTIES ----------------
+            substitution_count = sum(
+                item["Type"] == "Substitution"
+                for item in mutations
+            )
+
+            insertion_count = sum(
+                item["Type"] == "Insertion"
+                for item in mutations
+            )
+
+            deletion_count = sum(
+                item["Type"] == "Deletion"
+                for item in mutations
+            )
+
+            c1, c2, c3 = st.columns(3)
+
+            c1.metric("Substitutions", substitution_count)
+            c2.metric("Insertions", insertion_count)
+            c3.metric("Deletions", deletion_count)
+
+            st.download_button(
+                "⬇️ Download Mutation Results (CSV)",
+                data=mutation_df.to_csv(index=False),
+                file_name="variantvision_mutations.csv",
+                mime="text/csv"
+            )
+
+        else:
+            st.success(
+                "No amino-acid changes detected. "
+                "The aligned sequences are identical."
+            )
+
+        # ------------------------------------------
+        # 5D. PROTEIN PROPERTIES
+        # ------------------------------------------
 
         st.header("5. Protein Physicochemical Properties")
 
@@ -241,7 +347,7 @@ if analyze:
 
             properties = pd.DataFrame({
                 "Property": [
-                    "Sequence length",
+                    "Sequence length (amino acids)",
                     "Molecular weight (Da)",
                     "Theoretical isoelectric point (pI)",
                     "GRAVY score"
@@ -266,22 +372,26 @@ if analyze:
                 hide_index=True
             )
 
-            st.caption(
-                "GRAVY means Grand Average of Hydropathicity. "
-                "These values are computational estimates, not "
-                "direct experimental measurements."
-            )
+            st.subheader("Molecular Weight Comparison")
 
-            st.bar_chart(
-                properties.set_index("Property")[
-                    ["Reference", "Variant"]
+            weight_comparison = pd.DataFrame({
+                "Sequence": ["Reference", "Variant"],
+                "Molecular weight (Da)": [
+                    ref_analysis.molecular_weight(),
+                    var_analysis.molecular_weight()
                 ]
-            )
+            }).set_index("Sequence")
 
-            # Download results
+            st.bar_chart(weight_comparison)
+
+            st.caption(
+                "Theoretical pI is the estimated pH at which a protein "
+                "has no net charge. GRAVY is the Grand Average of "
+                "Hydropathicity. These are computational estimates."
+            )
 
             st.download_button(
-                label="⬇️ Download Protein Properties (CSV)",
+                "⬇️ Download Protein Properties (CSV)",
                 data=properties.to_csv(index=False),
                 file_name="variantvision_properties.csv",
                 mime="text/csv"
@@ -289,57 +399,66 @@ if analyze:
 
         except Exception as error:
             st.error(
-                "Unable to calculate protein properties. "
-                f"Please check the sequence. Details: {error}"
+                "Protein property calculation failed. "
+                "Please check the input sequences. "
+                f"Details: {error}"
             )
 
-        # ---------------- BIOLOGICAL INTERPRETATION ----------------
+        # ------------------------------------------
+        # 5E. BIOLOGICAL INTERPRETATION
+        # ------------------------------------------
 
-        st.header("6. Biological Significance")
+        st.header("6. Biological Interpretation")
 
-        if reference == REFERENCE_SEQUENCE and variant == VARIANT_SEQUENCE:
+        if (
+            reference == REFERENCE_SEQUENCE
+            and variant == VARIANT_SEQUENCE
+        ):
 
             st.markdown(
                 """
                 **Case study: Sickle-cell-associated HBB variant**
 
-                - **Gene:** HBB, which encodes the beta subunit of hemoglobin.
-                - **Reference residue:** Glutamic acid (E).
-                - **Variant residue:** Valine (V).
-                - **Full precursor numbering:** p.Glu7Val (E7V).
-                - **Mature beta-globin numbering:** Glu6Val (E6V).
+                - **Gene:** HBB
+                - **Reference amino acid:** Glutamic acid (E)
+                - **Variant amino acid:** Valine (V)
+                - **Full precursor numbering:** p.Glu7Val (E7V)
+                - **Mature beta-globin numbering:** Glu6Val (E6V)
 
-                The substitution replaces a negatively charged amino acid
-                with a hydrophobic amino acid. Under low-oxygen conditions,
-                hemoglobin S can polymerize, contributing to red blood
-                cell deformation and the clinical features of sickle-cell
-                disease.
+                This substitution replaces a negatively charged amino
+                acid with a hydrophobic amino acid. Under low-oxygen
+                conditions, hemoglobin S can polymerize, contributing
+                to red blood cell deformation and sickle-cell disease.
                 """
             )
 
         elif mutations:
+
             st.write(
-                "One or more amino-acid differences were detected. "
-                "Their biological significance cannot be determined "
-                "from sequence comparison and physicochemical properties "
-                "alone. Further biological evidence is required."
+                "Sequence differences were detected. Their biological "
+                "effects depend on the protein, the position of each "
+                "change, structural context and experimental evidence. "
+                "Sequence comparison alone cannot determine whether "
+                "an unknown variant causes disease."
             )
 
         else:
+
             st.write(
                 "No amino-acid differences were detected. "
-                "The sequences have the same amino-acid sequence."
+                "The reference and variant sequences are identical."
             )
 
         st.warning(
             "Educational limitation: this tool identifies sequence "
-            "differences and estimates protein properties. It does not "
-            "independently diagnose disease or establish the clinical "
-            "significance of an unknown variant."
+            "differences and calculates theoretical properties. "
+            "It does not diagnose disease or independently establish "
+            "the clinical significance of an unknown variant."
         )
 
-
-# ---------------- FOOTER ----------------
+# ==================================================
+# 6. FOOTER
+# ==================================================
 
 st.divider()
 
