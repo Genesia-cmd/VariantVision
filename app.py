@@ -1,5 +1,4 @@
 
-import io
 import re
 import requests
 import pandas as pd
@@ -9,9 +8,9 @@ from Bio.Align import PairwiseAligner
 from Bio.SeqUtils.ProtParam import ProteinAnalysis
 
 
-# --------------------------------------------------
-# PAGE CONFIGURATION
-# --------------------------------------------------
+# =========================================================
+# 1. PAGE CONFIGURATION
+# =========================================================
 
 st.set_page_config(
     page_title="VariantVision",
@@ -21,29 +20,27 @@ st.set_page_config(
 
 st.title("🧬 VariantVision")
 st.subheader(
-    "Interactive Protein Sequence Comparison, "
-    "Mutation Detection and Variant Search"
+    "Protein Sequence Comparison, Mutation Detection "
+    "and Genetic Variant Exploration"
 )
 
 st.write(
-    "An educational bioinformatics platform for protein sequence "
-    "analysis, mutation comparison and exploration of documented "
-    "genetic variants."
+    "An interactive bioinformatics platform for comparing protein "
+    "sequences, analysing physicochemical properties, and exploring "
+    "documented genetic variant records."
 )
 
 st.info(
-    "Educational project only. ClinVar interpretations are submitted "
-    "and reviewed according to the database's processes. This app is "
-    "not a diagnostic tool."
+    "Educational project only. This application does not diagnose "
+    "diseases or independently determine whether a variant is harmful."
 )
 
-# Official NCBI E-utilities endpoint
 NCBI_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
 
-# Standard amino acids
 VALID_AA = set("ACDEFGHIKLMNPQRSTVWY")
 
-# Example beta-globin protein sequence
+# Example beta-globin protein sequence.
+# The substitution at position 7 changes E to V.
 HBB_REFERENCE = (
     "MVHLTPEEKSAVTALWGKVNVDEVGGEALGRLLVVYPWTQRFFESFGDLSTPDAVMGNPKVK"
     "AHGKKVLGAFSDGLAHLDNLKGTFATLSELHCDKLHVDPENFRLLGNVLVCVLAHHFGKEFT"
@@ -53,54 +50,57 @@ HBB_REFERENCE = (
 HBB_VARIANT = HBB_REFERENCE[:6] + "V" + HBB_REFERENCE[7:]
 
 
-# --------------------------------------------------
-# HELPER FUNCTIONS
-# --------------------------------------------------
+# =========================================================
+# 2. SEQUENCE INPUT AND VALIDATION
+# =========================================================
 
 def clean_sequence(raw_text):
-    """Extract a protein sequence from plain text or FASTA."""
+    """Read a protein sequence from plain text or FASTA."""
 
     lines = raw_text.strip().splitlines()
 
-    # Remove FASTA header lines
     sequence_lines = [
         line.strip()
         for line in lines
         if line.strip() and not line.strip().startswith(">")
     ]
 
-    sequence = "".join(sequence_lines)
-    sequence = re.sub(r"\s+", "", sequence).upper()
+    sequence = re.sub(
+        r"\s+", "", "".join(sequence_lines)
+    ).upper()
 
-    # Reject invalid characters rather than silently removing them
     if not sequence:
-        raise ValueError("No protein sequence was found.")
+        raise ValueError("No protein sequence was entered or uploaded.")
 
     invalid = sorted(set(sequence) - VALID_AA)
 
     if invalid:
         raise ValueError(
-            "Invalid protein character(s): "
+            "Invalid amino-acid character(s): "
             + ", ".join(invalid)
-            + ". Use the 20 standard amino-acid letters only."
+            + ". Please use the 20 standard amino-acid letters."
         )
 
     return sequence
 
 
 def get_sequence(pasted_text, uploaded_file):
-    """Use the uploaded FASTA file if supplied; otherwise use pasted text."""
+    """Prefer the uploaded file when one is provided."""
 
     if uploaded_file is not None:
-        raw = uploaded_file.getvalue().decode("utf-8")
+        raw_text = uploaded_file.getvalue().decode("utf-8")
     else:
-        raw = pasted_text
+        raw_text = pasted_text
 
-    return clean_sequence(raw)
+    return clean_sequence(raw_text)
 
+
+# =========================================================
+# 3. PROTEIN ALIGNMENT AND DIFFERENCE DETECTION
+# =========================================================
 
 def compare_sequences(reference, variant):
-    """Globally align two protein sequences and report differences."""
+    """Perform global alignment and identify sequence differences."""
 
     aligner = PairwiseAligner()
     aligner.mode = "global"
@@ -113,8 +113,8 @@ def compare_sequences(reference, variant):
     coordinates = alignment.coordinates
     changes = []
 
-    # Walk through the aligned coordinate blocks
     for i in range(coordinates.shape[1] - 1):
+
         r0 = int(coordinates[0, i])
         r1 = int(coordinates[0, i + 1])
         v0 = int(coordinates[1, i])
@@ -123,14 +123,18 @@ def compare_sequences(reference, variant):
         ref_length = r1 - r0
         var_length = v1 - v0
 
-        # Substitutions or diagonal alignment block
+        # Aligned blocks containing residues in both sequences
         if ref_length > 0 and var_length > 0:
+
             if ref_length == var_length:
+
                 for k in range(ref_length):
+
                     ref_aa = reference[r0 + k]
                     var_aa = variant[v0 + k]
 
                     if ref_aa != var_aa:
+
                         changes.append({
                             "Type": "Substitution",
                             "Reference position": r0 + k + 1,
@@ -141,8 +145,9 @@ def compare_sequences(reference, variant):
                                 f"{ref_aa}{r0 + k + 1}{var_aa}"
                             )
                         })
+
             else:
-                # Defensive fallback for a complex alignment block
+
                 changes.append({
                     "Type": "Complex alignment block",
                     "Reference position": f"{r0 + 1}-{r1}",
@@ -152,14 +157,17 @@ def compare_sequences(reference, variant):
                     "Change": "Review aligned sequences"
                 })
 
-        # Residues present only in the reference: deletion
+        # Residues present in the reference but absent in the variant
         elif ref_length > 0:
+
             deleted = reference[r0:r1]
 
             changes.append({
                 "Type": "Deletion",
                 "Reference position": (
-                    f"{r0 + 1}-{r1}" if ref_length > 1 else r0 + 1
+                    f"{r0 + 1}-{r1}"
+                    if ref_length > 1
+                    else r0 + 1
                 ),
                 "Reference residue": deleted,
                 "Variant position": v0,
@@ -167,8 +175,9 @@ def compare_sequences(reference, variant):
                 "Change": f"del {deleted}"
             })
 
-        # Residues present only in the variant: insertion
+        # Residues present in the variant but absent in the reference
         elif var_length > 0:
+
             inserted = variant[v0:v1]
 
             changes.append({
@@ -185,8 +194,11 @@ def compare_sequences(reference, variant):
     return alignment, changes
 
 
+# =========================================================
+# 4. PHYSICOCHEMICAL PROPERTIES
+# =========================================================
+
 def protein_properties(sequence, label):
-    """Calculate basic physicochemical properties."""
 
     analysis = ProteinAnalysis(sequence)
 
@@ -203,23 +215,239 @@ def protein_properties(sequence, label):
     }
 
 
+# =========================================================
+# 5. CLINVAR DATA EXTRACTION HELPERS
+# =========================================================
+
+def text_value(value):
+    """Convert common ClinVar API values into readable text."""
+
+    if value is None:
+        return ""
+
+    if isinstance(value, str):
+        return value.strip()
+
+    if isinstance(value, (int, float)):
+        return str(value)
+
+    if isinstance(value, list):
+        items = [text_value(item) for item in value]
+        return "; ".join(item for item in items if item)
+
+    if isinstance(value, dict):
+
+        for key in (
+            "description",
+            "trait_name",
+            "symbol",
+            "name",
+            "value"
+        ):
+            if value.get(key):
+                return text_value(value[key])
+
+    return ""
+
+
+def extract_genes(record):
+    """Extract gene symbols from root and nested variant structures."""
+
+    gene_names = []
+
+    def add_genes(items):
+        if not isinstance(items, list):
+            return
+
+        for item in items:
+
+            if isinstance(item, dict):
+                symbol = item.get("symbol") or item.get("name")
+
+                if symbol:
+                    gene_names.append(str(symbol))
+
+            elif isinstance(item, str):
+                gene_names.append(item)
+
+    add_genes(record.get("genes", []))
+
+    # ClinVar summaries may place gene data inside variation_set.
+    variation_set = record.get("variation_set", [])
+
+    if isinstance(variation_set, list):
+        for variation in variation_set:
+
+            if isinstance(variation, dict):
+                add_genes(variation.get("genes", []))
+
+    return list(dict.fromkeys(gene_names))
+
+
+def extract_phenotypes(record):
+    """Extract phenotype names from available summary fields."""
+
+    names = []
+
+    possible_fields = [
+        "trait_set",
+        "traits",
+        "germline_classification",
+        "clinical_impact_classification"
+    ]
+
+    for field in possible_fields:
+
+        value = record.get(field)
+
+        if field in ("trait_set", "traits"):
+
+            if isinstance(value, list):
+
+                for item in value:
+
+                    if isinstance(item, dict):
+
+                        name = (
+                            item.get("trait_name")
+                            or item.get("name")
+                            or item.get("description")
+                        )
+
+                        if name:
+                            names.append(str(name))
+
+                    elif isinstance(item, str):
+                        names.append(item)
+
+    return list(dict.fromkeys(names))
+
+
+def extract_classification(record):
+    """Read current ClinVar classification summaries."""
+
+    classifications = []
+    review_statuses = []
+
+    classification_fields = [
+        ("Germline", "germline_classification"),
+        ("Somatic clinical impact", "clinical_impact_classification"),
+        ("Oncogenicity", "oncogenicity_classification")
+    ]
+
+    for label, field in classification_fields:
+
+        item = record.get(field)
+
+        if isinstance(item, dict):
+
+            description = text_value(item.get("description"))
+
+            if description:
+                classifications.append(
+                    f"{label}: {description}"
+                )
+
+            review = text_value(item.get("review_status"))
+
+            if review:
+                review_statuses.append(
+                    f"{label}: {review}"
+                )
+
+    # Support older summaries that expose clinical_significance.
+    old_significance = record.get("clinical_significance")
+
+    if isinstance(old_significance, dict):
+
+        description = text_value(
+            old_significance.get("description")
+        )
+
+        if description and not classifications:
+            classifications.append(description)
+
+        review = text_value(
+            old_significance.get("review_status")
+        )
+
+        if review and not review_statuses:
+            review_statuses.append(review)
+
+    elif isinstance(old_significance, str) and old_significance:
+
+        if not classifications:
+            classifications.append(old_significance)
+
+    significance_text = (
+        "; ".join(classifications)
+        if classifications
+        else "Not reported in this summary"
+    )
+
+    review_text = (
+        "; ".join(review_statuses)
+        if review_statuses
+        else "Not reported in this summary"
+    )
+
+    return significance_text, review_text
+
+
+def extract_variant_type(record):
+    """Extract variant type from the root or nested variation records."""
+
+    variant_types = []
+
+    root_type = text_value(record.get("variant_type"))
+
+    if root_type:
+        variant_types.append(root_type)
+
+    variation_set = record.get("variation_set", [])
+
+    if isinstance(variation_set, list):
+
+        for variation in variation_set:
+
+            if not isinstance(variation, dict):
+                continue
+
+            variation_type = (
+                variation.get("variation_type")
+                or variation.get("variant_type")
+            )
+
+            variation_type = text_value(variation_type)
+
+            if variation_type:
+                variant_types.append(variation_type)
+
+    return "; ".join(dict.fromkeys(variant_types))
+
+
+# =========================================================
+# 6. SEARCH NCBI CLINVAR
+# =========================================================
+
 def fetch_clinvar_records(query, search_type, max_records):
-    """Search ClinVar and retrieve summary information using NCBI E-utilities."""
+    """Search ClinVar and return structured variant summaries."""
 
     query = query.strip()
 
+    if not query:
+        return []
+
     if search_type == "Gene":
-        # Search the ClinVar gene field
         search_term = f"{query}[gene]"
     else:
-        # Use a general ClinVar search for disease/phenotype terms
         search_term = query
 
     headers = {
         "User-Agent": "VariantVisionEducationalProject/1.0"
     }
 
-    # 1. Find matching ClinVar record IDs
+    # Step 1: Retrieve matching ClinVar record IDs.
     search_response = requests.get(
         NCBI_BASE + "esearch.fcgi",
         params={
@@ -229,17 +457,21 @@ def fetch_clinvar_records(query, search_type, max_records):
             "retmode": "json"
         },
         headers=headers,
-        timeout=25
+        timeout=30
     )
+
     search_response.raise_for_status()
+
     search_data = search_response.json()
 
-    ids = search_data.get("esearchresult", {}).get("idlist", [])
+    ids = search_data.get(
+        "esearchresult", {}
+    ).get("idlist", [])
 
     if not ids:
         return []
 
-    # 2. Retrieve summaries for the returned record IDs
+    # Step 2: Retrieve summaries for the record IDs.
     summary_response = requests.get(
         NCBI_BASE + "esummary.fcgi",
         params={
@@ -248,86 +480,77 @@ def fetch_clinvar_records(query, search_type, max_records):
             "retmode": "json"
         },
         headers=headers,
-        timeout=25
+        timeout=30
     )
-    summary_response.raise_for_status()
-    summary_data = summary_response.json()
 
+    summary_response.raise_for_status()
+
+    summary_data = summary_response.json()
     result_data = summary_data.get("result", {})
+
     records = []
 
     for record_id in ids:
-        record = result_data.get(record_id, {})
+
+        record = result_data.get(str(record_id), {})
 
         if not isinstance(record, dict):
             continue
 
-        # Extract fields defensively because records can vary
-        genes = record.get("genes", [])
-        gene_names = []
+        genes = extract_genes(record)
+        phenotypes = extract_phenotypes(record)
 
-        if isinstance(genes, list):
-            for gene in genes:
-                if isinstance(gene, dict):
-                    name = gene.get("symbol")
-                    if name:
-                        gene_names.append(name)
+        significance, review_status = extract_classification(record)
 
-        traits = record.get("trait_set", [])
-        trait_names = []
+        variant_type = extract_variant_type(record)
 
-        if isinstance(traits, list):
-            for trait in traits:
-                if isinstance(trait, dict):
-                    name = trait.get("trait_name")
-                    if name:
-                        trait_names.append(name)
+        accession = text_value(record.get("accession"))
+        title = text_value(record.get("title"))
 
-        significance = record.get("clinical_significance", {})
+        if not title:
+            title = "Title not supplied in summary"
 
-        if isinstance(significance, dict):
-            significance_text = significance.get(
-                "description", "Not provided in summary"
-            )
-            review_status = significance.get(
-                "review_status", "Not provided in summary"
-            )
-        else:
-            significance_text = str(significance or "Not provided")
-            review_status = "Not provided in summary"
+        # Some summaries do not contain all phenotype details.
+        phenotype_text = (
+            "; ".join(phenotypes)
+            if phenotypes
+            else "Not reported in summary; open the source record"
+        )
 
-        accession = record.get("accession", "")
-        title = record.get("title", "Title not provided")
-        variation_type = record.get("variant_type", "")
+        gene_text = (
+            ", ".join(genes)
+            if genes
+            else "Not reported in summary"
+        )
+
+        variant_url = (
+            "https://www.ncbi.nlm.nih.gov/clinvar/variation/"
+            + str(record_id) + "/"
+        )
 
         records.append({
-            "ClinVar ID": record_id,
-            "Accession": accession,
+            "ClinVar ID": str(record_id),
+            "Accession": accession or "Not listed",
             "Title / Variant": title,
-            "Gene": ", ".join(gene_names) or "Not listed in summary",
-            "Associated phenotype": (
-                "; ".join(trait_names) or "Not listed in summary"
-            ),
-            "Clinical significance": significance_text,
+            "Gene": gene_text,
+            "Associated phenotype": phenotype_text,
+            "Clinical significance": significance,
             "Review status": review_status,
-            "Variant type": variation_type,
-            "ClinVar URL": (
-                f"https://www.ncbi.nlm.nih.gov/clinvar/variation/"
-                f"{record_id}/"
-            )
+            "Variant type": variant_type or "Not reported in summary",
+            "ClinVar URL": variant_url
         })
 
     return records
 
 
-# --------------------------------------------------
-# SIDEBAR NAVIGATION
-# --------------------------------------------------
+# =========================================================
+# 7. SIDEBAR NAVIGATION
+# =========================================================
 
-st.sidebar.title("Navigation")
+st.sidebar.title("🧬 VariantVision")
 
 mode = st.sidebar.radio(
-    "Choose an analysis mode",
+    "Choose a section",
     [
         "Home",
         "General Protein Analysis",
@@ -337,86 +560,92 @@ mode = st.sidebar.radio(
 )
 
 
-# --------------------------------------------------
-# HOME
-# --------------------------------------------------
+# =========================================================
+# 8. HOME PAGE
+# =========================================================
 
 if mode == "Home":
 
     st.header("Welcome to VariantVision")
 
     st.write(
-        "VariantVision demonstrates how bioinformatics tools can "
-        "help compare protein sequences and explore documented "
-        "genetic variants."
+        "Explore protein sequence differences and retrieve "
+        "documented genetic variant records through an interactive "
+        "bioinformatics dashboard."
     )
 
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("🧬 Protein Analysis")
+
+        st.subheader("🧬 General Protein Analysis")
+
         st.write(
             "- Paste protein sequences\n"
             "- Upload FASTA files\n"
             "- Perform global pairwise alignment\n"
-            "- Identify sequence differences\n"
-            "- Calculate protein properties\n"
-            "- Download analysis results"
+            "- Detect substitutions, insertions and deletions\n"
+            "- Calculate protein physicochemical properties\n"
+            "- Download analysis reports"
         )
 
     with col2:
-        st.subheader("🔎 Variant Database Search")
+
+        st.subheader("🔎 Disease / Gene Search")
+
         st.write(
-            "- Search by gene or disease name\n"
-            "- Retrieve ClinVar record summaries\n"
-            "- View reported clinical interpretations\n"
-            "- Review database record links\n"
-            "- Explore documented variant information"
+            "- Search ClinVar online\n"
+            "- Enter a gene or disease name\n"
+            "- View available variant summaries\n"
+            "- Inspect reported interpretations\n"
+            "- Open original database records\n"
+            "- Export search results"
         )
 
     st.divider()
 
-    st.subheader("How the platform works")
+    st.subheader("Project workflow")
 
     st.code(
-        "Sequence Input / Database Search\n"
-        "             ↓\n"
-        "   Data Validation / Retrieval\n"
-        "             ↓\n"
-        "  Alignment / Variant Exploration\n"
-        "             ↓\n"
-        "   Properties and Results Table\n"
-        "             ↓\n"
-        "       Download Results",
+        "Sequence Input or Gene/Disease Query\n"
+        "                 ↓\n"
+        "        Data Validation / Retrieval\n"
+        "                 ↓\n"
+        "   Alignment / Variant Record Exploration\n"
+        "                 ↓\n"
+        "      Properties and Results Table\n"
+        "                 ↓\n"
+        "           Export Results",
         language="text"
     )
 
     st.caption(
-        "Start with either analysis mode using the sidebar."
+        "Choose a section from the sidebar to get started."
     )
 
 
-# --------------------------------------------------
-# GENERAL PROTEIN ANALYSIS
-# --------------------------------------------------
+# =========================================================
+# 9. GENERAL PROTEIN ANALYSIS
+# =========================================================
 
 elif mode == "General Protein Analysis":
 
     st.header("General Protein Analysis")
 
     st.write(
-        "Enter a reference protein and a variant protein. "
-        "Each sequence may be pasted or supplied as a FASTA file."
+        "Provide a reference protein and a variant protein. "
+        "You can paste the sequences or upload FASTA files."
     )
 
     st.caption(
-        "If a FASTA file is uploaded for a sequence, it takes "
-        "priority over the text box for that sequence."
+        "If a file is uploaded for a sequence, the uploaded file "
+        "takes priority over the corresponding text box."
     )
 
     left, right = st.columns(2)
 
     with left:
+
         st.subheader("Reference Protein")
 
         ref_file = st.file_uploader(
@@ -426,13 +655,14 @@ elif mode == "General Protein Analysis":
         )
 
         ref_text = st.text_area(
-            "Or paste the reference sequence",
+            "Or paste reference sequence",
             value=HBB_REFERENCE,
             height=160,
             key="reference_text"
         )
 
     with right:
+
         st.subheader("Variant Protein")
 
         var_file = st.file_uploader(
@@ -442,30 +672,31 @@ elif mode == "General Protein Analysis":
         )
 
         var_text = st.text_area(
-            "Or paste the variant sequence",
+            "Or paste variant sequence",
             value=HBB_VARIANT,
             height=160,
             key="variant_text"
         )
 
     st.caption(
-        "Default example: an HBB protein sequence with a single "
-        "amino-acid substitution. These defaults are examples, "
-        "not a clinical sequence-validation service."
+        "The default example changes amino acid E at position 7 to V. "
+        "Protein numbering conventions may differ from mature-chain "
+        "numbering; this example is for educational comparison."
     )
 
-    run_analysis = st.button(
+    if st.button(
         "Analyse Protein Sequences",
         type="primary",
         use_container_width=True
-    )
+    ):
 
-    if run_analysis:
         try:
+
             reference = get_sequence(ref_text, ref_file)
             variant = get_sequence(var_text, var_file)
 
-            with st.spinner("Aligning and analysing sequences..."):
+            with st.spinner("Analysing protein sequences..."):
+
                 alignment, changes = compare_sequences(
                     reference, variant
                 )
@@ -475,22 +706,22 @@ elif mode == "General Protein Analysis":
                     protein_properties(variant, "Variant")
                 ])
 
-            st.success("Sequence analysis completed.")
+            st.success("Analysis completed.")
 
-            # Summary metrics
-            m1, m2, m3 = st.columns(3)
+            # Summary
+            c1, c2, c3 = st.columns(3)
 
-            m1.metric(
+            c1.metric(
                 "Reference length",
                 f"{len(reference)} aa"
             )
 
-            m2.metric(
+            c2.metric(
                 "Variant length",
                 f"{len(variant)} aa"
             )
 
-            m3.metric(
+            c3.metric(
                 "Differences detected",
                 len(changes)
             )
@@ -499,49 +730,47 @@ elif mode == "General Protein Analysis":
             st.subheader("1. Global Pairwise Alignment")
 
             st.write(
-                "Alignment score:",
-                round(float(alignment.score), 2)
+                f"Alignment score: {float(alignment.score):.2f}"
             )
 
-            with st.expander("View aligned sequences", expanded=True):
+            with st.expander("View alignment", expanded=True):
                 st.text(alignment.format())
 
             st.caption(
-                "Alignment uses match = +2, mismatch = -1, "
-                "gap opening = -5 and gap extension = -0.5. "
-                "The chosen alignment can depend on these scoring settings."
+                "Scoring: match +2, mismatch -1, gap opening -5, "
+                "gap extension -0.5."
             )
 
-            # Mutations
+            # Difference table
             st.subheader("2. Detected Sequence Differences")
 
             if changes:
+
                 mutation_df = pd.DataFrame(changes)
+
                 st.dataframe(
                     mutation_df,
                     use_container_width=True,
                     hide_index=True
                 )
 
-                mutation_csv = mutation_df.to_csv(
-                    index=False
-                ).encode("utf-8")
-
                 st.download_button(
-                    "Download Mutation Report (CSV)",
-                    data=mutation_csv,
+                    "Download Mutation Results (CSV)",
+                    data=mutation_df.to_csv(
+                        index=False
+                    ).encode("utf-8"),
                     file_name="variantvision_mutations.csv",
                     mime="text/csv"
                 )
 
             else:
+
                 st.success(
-                    "No amino-acid differences were detected "
-                    "between these sequences."
+                    "No amino-acid differences were detected."
                 )
 
-            # Properties
-            st.subheader("3. Protein Physicochemical Properties")
+            # Protein properties
+            st.subheader("3. Physicochemical Properties")
 
             st.dataframe(
                 properties,
@@ -549,47 +778,45 @@ elif mode == "General Protein Analysis":
                 hide_index=True
             )
 
-            st.write("Molecular weight comparison")
+            st.write("Molecular weight")
 
-            chart_df = properties.set_index("Sequence")[
-                ["Molecular weight (Da)"]
-            ]
-
-            st.bar_chart(chart_df)
+            st.bar_chart(
+                properties.set_index("Sequence")[
+                    ["Molecular weight (Da)"]
+                ]
+            )
 
             st.write("Theoretical isoelectric point (pI)")
 
-            pi_df = properties.set_index("Sequence")[
-                ["Theoretical pI"]
-            ]
-
-            st.bar_chart(pi_df)
+            st.bar_chart(
+                properties.set_index("Sequence")[
+                    ["Theoretical pI"]
+                ]
+            )
 
             st.write("GRAVY score")
 
-            gravy_df = properties.set_index("Sequence")[["GRAVY"]]
-
-            st.bar_chart(gravy_df)
-
-            properties_csv = properties.to_csv(
-                index=False
-            ).encode("utf-8")
+            st.bar_chart(
+                properties.set_index("Sequence")[["GRAVY"]]
+            )
 
             st.download_button(
                 "Download Protein Properties (CSV)",
-                data=properties_csv,
-                file_name="variantvision_protein_properties.csv",
+                data=properties.to_csv(
+                    index=False
+                ).encode("utf-8"),
+                file_name="variantvision_properties.csv",
                 mime="text/csv"
             )
 
-            # Export a simple combined report
-            report_lines = [
-                "VariantVision Protein Analysis Report",
-                "=" * 40,
+            # Combined report
+            report = [
+                "VARIANTVISION PROTEIN ANALYSIS REPORT",
+                "=" * 42,
                 f"Reference length: {len(reference)} amino acids",
                 f"Variant length: {len(variant)} amino acids",
                 f"Alignment score: {alignment.score}",
-                f"Differences detected: {len(changes)}",
+                f"Detected differences: {len(changes)}",
                 "",
                 "REFERENCE SEQUENCE",
                 reference,
@@ -597,76 +824,82 @@ elif mode == "General Protein Analysis":
                 "VARIANT SEQUENCE",
                 variant,
                 "",
-                "ALIGNMENT",
+                "GLOBAL ALIGNMENT",
                 alignment.format(),
                 "",
-                "SEQUENCE DIFFERENCES"
+                "DETECTED DIFFERENCES"
             ]
 
             if changes:
-                for change in changes:
-                    report_lines.append(
-                        f"{change['Type']}: {change['Change']} "
-                        f"(reference position: "
-                        f"{change['Reference position']})"
-                    )
-            else:
-                report_lines.append("No differences detected.")
 
-            report_lines.extend([
+                for change in changes:
+
+                    report.append(
+                        f"{change['Type']}: {change['Change']} | "
+                        f"Reference position: "
+                        f"{change['Reference position']}"
+                    )
+
+            else:
+
+                report.append("No differences detected.")
+
+            report.extend([
                 "",
-                "INTERPRETATION NOTE",
-                "Sequence differences alone do not establish "
-                "clinical significance or disease causation.",
-                "Insertion/deletion representations may depend "
-                "on alignment choices, particularly in repeated regions."
+                "INTERPRETATION",
+                "Sequence differences and physicochemical properties "
+                "do not independently establish clinical significance.",
+                "Alignment-dependent insertion/deletion descriptions "
+                "may require further review."
             ])
 
             st.download_button(
-                "Download Combined Analysis Report (TXT)",
-                data="\n".join(report_lines),
-                file_name="variantvision_analysis_report.txt",
+                "Download Combined Report (TXT)",
+                data="\n".join(report),
+                file_name="variantvision_report.txt",
                 mime="text/plain"
             )
 
-            st.subheader("4. Interpretation")
+            st.subheader("4. Biological Interpretation")
 
             st.write(
-                "A substitution changes one amino acid to another. "
-                "An insertion adds amino acid residue(s), while a "
-                "deletion removes residue(s). Differences in length, "
-                "molecular weight, pI or GRAVY describe sequence or "
-                "property changes; they do not by themselves prove "
-                "a harmful biological effect."
+                "A substitution replaces one amino acid with another. "
+                "An insertion adds amino acid residues, while a deletion "
+                "removes residues. Changes in molecular weight, pI and "
+                "GRAVY describe theoretical protein properties. These "
+                "measurements alone cannot determine whether a variant "
+                "causes disease."
             )
 
         except ValueError as error:
+
             st.error(str(error))
 
         except Exception as error:
+
             st.error(
-                "Analysis could not be completed. Check your input "
-                "sequences and try again."
+                "Protein analysis could not be completed. "
+                "Check the input and try again."
             )
+
             st.caption(f"Technical detail: {error}")
 
 
-# --------------------------------------------------
-# DISEASE / GENE SEARCH
-# --------------------------------------------------
+# =========================================================
+# 10. DISEASE / GENE SEARCH
+# =========================================================
 
 elif mode == "Disease / Gene Search":
 
     st.header("Disease / Gene Variant Search")
 
     st.write(
-        "Search NCBI ClinVar for documented variant records. "
-        "The results are retrieved online, so an internet connection "
-        "is required."
+        "Search the NCBI ClinVar database for variant records "
+        "associated with a gene or disease/phenotype term."
     )
 
     search_type = st.radio(
-        "Search by",
+        "Search type",
         ["Gene", "Disease / phenotype"],
         horizontal=True
     )
@@ -677,30 +910,33 @@ elif mode == "Disease / Gene Search":
     )
 
     max_records = st.selectbox(
-        "Maximum number of records to retrieve",
+        "Maximum records to retrieve",
         [5, 10, 20, 50],
         index=1
     )
 
     st.caption(
         "Gene searches use the ClinVar gene field. Disease searches "
-        "use a general ClinVar text search, so some returned records "
-        "may not directly match the intended phenotype."
+        "use a general ClinVar text query, so inspect each returned "
+        "record to confirm relevance."
     )
 
-    search_button = st.button(
+    if st.button(
         "Search ClinVar",
         type="primary",
         use_container_width=True
-    )
+    ):
 
-    if search_button:
         if not query.strip():
-            st.warning("Please enter a gene or disease name.")
+
+            st.warning("Enter a gene or disease name first.")
 
         else:
+
             try:
+
                 with st.spinner("Searching NCBI ClinVar..."):
+
                     records = fetch_clinvar_records(
                         query,
                         search_type,
@@ -708,20 +944,20 @@ elif mode == "Disease / Gene Search":
                     )
 
                 if not records:
+
                     st.warning(
-                        "No records were returned for this search. "
-                        "Try a recognised gene symbol or a different "
-                        "disease/phenotype term."
+                        "No records were returned. Try a recognised "
+                        "gene symbol or another search term."
                     )
 
                 else:
+
                     st.success(
                         f"Retrieved {len(records)} ClinVar record(s)."
                     )
 
                     results_df = pd.DataFrame(records)
 
-                    # Keep the main table readable
                     display_columns = [
                         "ClinVar ID",
                         "Accession",
@@ -729,7 +965,8 @@ elif mode == "Disease / Gene Search":
                         "Gene",
                         "Associated phenotype",
                         "Clinical significance",
-                        "Review status"
+                        "Review status",
+                        "Variant type"
                     ]
 
                     st.dataframe(
@@ -738,19 +975,20 @@ elif mode == "Disease / Gene Search":
                         hide_index=True
                     )
 
-                    # Provide direct links to the source records
-                    st.subheader("Individual Record Details")
+                    st.subheader("Record Details and Source Links")
 
                     for record in records:
+
                         heading = (
                             f"ClinVar {record['ClinVar ID']} — "
                             f"{record['Title / Variant']}"
                         )
 
                         with st.expander(heading):
+
                             st.write(
                                 "**Accession:**",
-                                record["Accession"] or "Not listed"
+                                record["Accession"]
                             )
 
                             st.write(
@@ -775,7 +1013,7 @@ elif mode == "Disease / Gene Search":
 
                             st.write(
                                 "**Variant type:**",
-                                record["Variant type"] or "Not listed"
+                                record["Variant type"]
                             )
 
                             st.markdown(
@@ -783,88 +1021,101 @@ elif mode == "Disease / Gene Search":
                                 f"({record['ClinVar URL']})"
                             )
 
-                    csv_data = results_df.to_csv(
-                        index=False
-                    ).encode("utf-8")
-
                     st.download_button(
-                        "Download ClinVar Search Results (CSV)",
-                        data=csv_data,
+                        "Download ClinVar Results (CSV)",
+                        data=results_df.to_csv(
+                            index=False
+                        ).encode("utf-8"),
                         file_name="variantvision_clinvar_results.csv",
                         mime="text/csv"
                     )
 
                     st.caption(
-                        "Search results reflect the records returned "
-                        "by NCBI at the time of the query. They are not "
-                        "a complete list of every possible variant."
+                        "The fields shown above are extracted from "
+                        "NCBI ESummary records. Some fields may be "
+                        "missing from a summary even when additional "
+                        "information is available on the source page."
                     )
 
             except requests.exceptions.Timeout:
+
                 st.error(
                     "NCBI took too long to respond. Please try again."
                 )
 
             except requests.exceptions.RequestException:
+
                 st.error(
-                    "Could not connect to NCBI. Check the internet "
-                    "connection or try again later."
+                    "Could not connect to NCBI. Check the connection "
+                    "or try again later."
                 )
 
             except Exception as error:
+
                 st.error(
                     "The ClinVar search could not be completed."
                 )
+
                 st.caption(f"Technical detail: {error}")
 
     st.divider()
 
-    st.subheader("How to interpret the results")
+    st.subheader("Understanding ClinVar Results")
 
     st.write(
-        "- **Clinical significance:** the interpretation reported "
-        "in the retrieved ClinVar summary.\n"
-        "- **Review status:** information about the review level "
-        "shown in the summary.\n"
-        "- **Accession and ClinVar ID:** identifiers that help you "
-        "locate the original database record.\n"
-        "- **Associated phenotype:** the phenotype or condition "
-        "linked to the record in the returned summary."
+        "**Clinical significance:** the classification reported "
+        "in the retrieved summary, when available."
+    )
+
+    st.write(
+        "**Review status:** the review information provided with "
+        "the classification, when available."
+    )
+
+    st.write(
+        "**Associated phenotype:** a condition or phenotype linked "
+        "to the record in the returned summary."
+    )
+
+    st.write(
+        "**Variant type:** the kind of sequence variation described "
+        "by the record, when included in the summary."
     )
 
     st.warning(
-        "Do not interpret a database result as an individual diagnosis. "
-        "Clinical significance can differ across records and may change "
-        "as evidence is updated. Check the original ClinVar entry."
+        "Missing fields do not necessarily mean that information "
+        "is absent from the complete record. Open the original entry "
+        "to inspect its detailed data and evidence. VariantVision "
+        "does not independently validate clinical interpretations."
     )
 
     st.markdown(
-        "[NCBI ClinVar — official database]"
+        "[Visit the official NCBI ClinVar database]"
         "(https://www.ncbi.nlm.nih.gov/clinvar/)"
     )
 
 
-# --------------------------------------------------
-# ABOUT THE PROJECT
-# --------------------------------------------------
+# =========================================================
+# 11. ABOUT THE PROJECT
+# =========================================================
 
 elif mode == "About the Project":
 
     st.header("About VariantVision")
 
-    st.subheader("Project objective")
+    st.subheader("Objective")
 
     st.write(
         "To develop an interactive bioinformatics application that "
-        "compares protein sequences, detects amino-acid differences, "
-        "calculates physicochemical properties and retrieves "
+        "compares protein sequences, identifies amino-acid differences, "
+        "calculates physicochemical properties, and retrieves "
         "documented genetic variant records."
     )
 
-    st.subheader("Tools and technologies")
+    st.subheader("Tools and Technologies")
 
-    tools_df = pd.DataFrame({
-        "Tool": [
+    technology_df = pd.DataFrame({
+        "Technology": [
             "Python",
             "Streamlit",
             "Biopython",
@@ -874,70 +1125,64 @@ elif mode == "About the Project":
         ],
         "Purpose": [
             "Core programming language",
-            "Browser-based interactive interface",
-            "Protein alignment and sequence properties",
-            "Tabular data handling and CSV export",
-            "Online HTTP requests",
-            "Search and retrieval of variant records"
+            "Interactive browser-based interface",
+            "Sequence alignment and protein properties",
+            "Tabular data management and CSV export",
+            "HTTP requests to online services",
+            "Search and retrieval of variant summaries"
         ]
     })
 
     st.dataframe(
-        tools_df,
+        technology_df,
         use_container_width=True,
         hide_index=True
     )
 
-    st.subheader("Bioinformatics concepts covered")
+    st.subheader("Bioinformatics Concepts")
 
     st.write(
         "1. Protein sequence analysis\n"
         "2. Global pairwise sequence alignment\n"
         "3. Substitution, insertion and deletion detection\n"
-        "4. Protein molecular weight and theoretical pI\n"
-        "5. GRAVY and basic physicochemical analysis\n"
-        "6. Biological database search and retrieval\n"
+        "4. Molecular weight and theoretical isoelectric point\n"
+        "5. GRAVY score and physicochemical properties\n"
+        "6. Biological database search\n"
         "7. Comparative protein analysis\n"
-        "8. Interpretation of documented variant records"
+        "8. Exploration of documented genetic variants"
     )
 
     st.subheader("Limitations")
 
     st.write(
-        "- Protein alignment depends on the selected scoring scheme.\n"
-        "- Alignment-derived mutation descriptions may be ambiguous "
-        "in repeated sequence regions.\n"
+        "- Alignment results depend on scoring parameters.\n"
+        "- Insertions and deletions can have ambiguous representations "
+        "in repeated regions.\n"
         "- Protein properties are theoretical estimates.\n"
-        "- ClinVar search results depend on the query and available "
-        "database records.\n"
-        "- The application does not validate clinical variants or "
-        "predict disease risk."
+        "- Online search results depend on the query and database records.\n"
+        "- Summary responses may not contain every field from the full record.\n"
+        "- The app is not a clinical interpretation or diagnostic system."
     )
 
-    st.subheader("Data source")
+    st.subheader("Data Source")
 
     st.markdown(
         "[NCBI ClinVar](https://www.ncbi.nlm.nih.gov/clinvar/)"
     )
 
     st.caption(
-        "ClinVar is maintained by the National Center for "
-        "Biotechnology Information (NCBI)."
-    )
-
-    st.caption(
-        "VariantVision is an educational student project and is "
-        "not an official NCBI application."
+        "VariantVision is an educational student project and is not "
+        "an official NCBI application."
     )
 
 
-# --------------------------------------------------
-# FOOTER
-# --------------------------------------------------
+# =========================================================
+# 12. FOOTER
+# =========================================================
 
 st.divider()
 
 st.caption(
     "VariantVision | Educational Bioinformatics Project | "
-    "Protein Analysis and Variant Exploration"
+    "Protein Sequence Analysis and Variant Exploration"
 )
