@@ -115,4 +115,3 @@ if st.button("Analyze Sequences"):
 
 st.divider()
 st.caption("VariantVision | Bioinformatics Project")
-
